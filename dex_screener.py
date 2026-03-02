@@ -29,31 +29,62 @@ class DexScreenerClient:
             response.raise_for_status()
             
             data = response.json()
-            if data.get('pairs'):
+            if data and data.get('pairs'):
                 return self._parse_token_data(data['pairs'][0])
             return None
             
+        except requests.exceptions.Timeout:
+            logger.error(f"Timeout searching token {token_address}")
+            return None
         except Exception as e:
             logger.error(f"Error searching token {token_address}: {e}")
             return None
     
     def get_latest_tokens(self, limit: int = 20) -> List[Dict]:
-        """Get latest tokens on Solana"""
+        """Get latest tokens on Solana - using correct endpoint"""
         try:
-            url = f"{self.api_url}/tokens/solana?limit={limit}"
+            # DexScreener correct endpoint for latest tokens
+            url = f"{self.api_url}/tokens/solana/latest"
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
             
             data = response.json()
             tokens = []
             
-            for pair in data.get('pairs', [])[:limit]:
+            # Handle response structure properly
+            if data is None:
+                logger.warning("DexScreener returned None response")
+                return []
+            
+            if not isinstance(data, dict):
+                logger.warning(f"Unexpected response type: {type(data)}")
+                return []
+            
+            pairs = data.get('pairs', [])
+            
+            if not pairs:
+                logger.warning("No pairs found in DexScreener response")
+                return []
+            
+            for pair in pairs[:limit]:
+                if pair is None:
+                    continue
                 token = self._parse_token_data(pair)
                 if token:
                     tokens.append(token)
             
+            logger.info(f"Fetched {len(tokens)} tokens from DexScreener")
             return tokens
             
+        except requests.exceptions.Timeout:
+            logger.error("DexScreener API timeout - request took too long")
+            return []
+        except requests.exceptions.ConnectionError:
+            logger.error("DexScreener API connection error")
+            return []
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP Error from DexScreener: {e.response.status_code}")
+            return []
         except Exception as e:
             logger.error(f"Error fetching latest tokens: {e}")
             return []
@@ -68,18 +99,31 @@ class DexScreenerClient:
             data = response.json()
             candles = []
             
+            if data is None or not isinstance(data, dict):
+                logger.warning(f"Invalid OHLCV response for {token_address}")
+                return []
+            
             for candle in data.get('candles', []):
-                candles.append({
-                    'timestamp': candle.get('timestamp'),
-                    'open': float(candle.get('open', 0)),
-                    'high': float(candle.get('high', 0)),
-                    'low': float(candle.get('low', 0)),
-                    'close': float(candle.get('close', 0)),
-                    'volume': float(candle.get('volume', 0))
-                })
+                if candle is None:
+                    continue
+                try:
+                    candles.append({
+                        'timestamp': candle.get('timestamp'),
+                        'open': float(candle.get('open', 0)),
+                        'high': float(candle.get('high', 0)),
+                        'low': float(candle.get('low', 0)),
+                        'close': float(candle.get('close', 0)),
+                        'volume': float(candle.get('volume', 0))
+                    })
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Error parsing candle data: {e}")
+                    continue
             
             return candles
             
+        except requests.exceptions.Timeout:
+            logger.error(f"Timeout fetching OHLCV for {token_address}")
+            return []
         except Exception as e:
             logger.error(f"Error fetching OHLCV for {token_address}: {e}")
             return []
@@ -87,19 +131,24 @@ class DexScreenerClient:
     def _parse_token_data(self, pair_data: Dict) -> Optional[Dict]:
         """Parse token data from DexScreener response"""
         try:
+            if pair_data is None or not isinstance(pair_data, dict):
+                logger.warning("Invalid pair_data received")
+                return None
+            
             base_token = pair_data.get('baseToken', {})
             
-            liquidity = float(pair_data.get('liquidity', {}).get('usd', 0))
-            market_cap = float(pair_data.get('marketCap', 0))
+            # Safe extraction with defaults
+            liquidity = float(pair_data.get('liquidity', {}).get('usd', 0)) if pair_data.get('liquidity') else 0
+            market_cap = float(pair_data.get('marketCap', 0)) if pair_data.get('marketCap') else 0
             
             if liquidity < MIN_LIQUIDITY_USD:
                 return None
             if market_cap > MAX_MARKET_CAP_USD:
                 return None
             
-            price_usd = float(pair_data.get('priceUsd', 0))
-            price_change_24h = float(pair_data.get('priceChange', {}).get('h24', 0))
-            volume_24h = float(pair_data.get('volume', {}).get('h24', 0))
+            price_usd = float(pair_data.get('priceUsd', 0)) if pair_data.get('priceUsd') else 0
+            price_change_24h = float(pair_data.get('priceChange', {}).get('h24', 0)) if pair_data.get('priceChange') else 0
+            volume_24h = float(pair_data.get('volume', {}).get('h24', 0)) if pair_data.get('volume') else 0
             
             return {
                 'mint_address': base_token.get('address'),
@@ -116,7 +165,7 @@ class DexScreenerClient:
                 'timestamp': datetime.now().isoformat()
             }
             
-        except Exception as e:
+        except (ValueError, TypeError, AttributeError) as e:
             logger.error(f"Error parsing token data: {e}")
             return None
     
@@ -125,11 +174,13 @@ class DexScreenerClient:
         filtered = []
         
         for token in tokens:
-            if token['market_cap_usd'] > MAX_MARKET_CAP_USD:
+            if token is None:
                 continue
-            if token['liquidity_usd'] < MIN_LIQUIDITY_USD:
+            if token.get('market_cap_usd', 0) > MAX_MARKET_CAP_USD:
                 continue
-            if token['volume_24h_usd'] < MIN_VOLUME_24H_USD:
+            if token.get('liquidity_usd', 0) < MIN_LIQUIDITY_USD:
+                continue
+            if token.get('volume_24h_usd', 0) < MIN_VOLUME_24H_USD:
                 continue
             
             filtered.append(token)
