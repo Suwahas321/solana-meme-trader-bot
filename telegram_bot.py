@@ -5,9 +5,11 @@ Real-time alerts, position monitoring, command execution
 
 import logging
 import os
+import asyncio
 from datetime import datetime
 from typing import Dict, Optional
 from dotenv import load_dotenv
+from threading import Thread
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -34,6 +36,8 @@ class TelegramBotHandler:
         
         self.application = Application.builder().token(self.telegram_token).build()
         self._setup_handlers()
+        self.polling_task = None
+        self.loop = None
         
         logger.info("✅ Telegram bot initialized")
     
@@ -49,8 +53,9 @@ class TelegramBotHandler:
     
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Start command"""
-        user = update.effective_user
-        message = f"""
+        try:
+            user = update.effective_user
+            message = f"""
 🤖 **Solana Meme Coin Trading Bot**
 
 👋 Welcome {user.first_name}!
@@ -62,35 +67,60 @@ class TelegramBotHandler:
 • `/pause` - Pause trading
 • `/resume` - Resume trading
 """
-        await update.message.reply_text(message, parse_mode='Markdown')
+            await update.message.reply_text(message, parse_mode='Markdown')
+        except Exception as e:
+            logger.error(f"Error in cmd_start: {e}")
     
     async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show bot status"""
         try:
-            summary = self.trading_bot.risk_manager.get_portfolio_summary()
+            if hasattr(self.trading_bot, 'risk_manager') and self.trading_bot.risk_manager:
+                summary = self.trading_bot.risk_manager.get_portfolio_summary()
+            else:
+                summary = {
+                    'open_positions': 0,
+                    'total_trades': 0,
+                    'win_rate': 0
+                }
+            
+            wallet_address = "Not initialized"
+            if hasattr(self.trading_bot, 'wallet') and self.trading_bot.wallet:
+                try:
+                    wallet_address = self.trading_bot.wallet.get_address()[:8] + "..."
+                except:
+                    wallet_address = "Error getting address"
+            
+            trading_status = '🟢 ACTIVE' if getattr(self.trading_bot, 'trading_active', False) else '🔴 PAUSED'
             
             status_text = f"""
 🤖 **BOT STATUS**
 
-**Trading:** {'🟢 ACTIVE' if self.trading_bot.trading_active else '🔴 PAUSED'}
-**Wallet:** `{self.trading_bot.wallet.get_address()[:8]}...`
+**Trading:** {trading_status}
+**Wallet:** `{wallet_address}`
 
 **Portfolio:**
-• Open Trades: {summary['open_positions']}
-• Total Trades: {summary['total_trades']}
-• Win Rate: {summary['win_rate']}
+• Open Trades: {summary.get('open_positions', 0)}
+• Total Trades: {summary.get('total_trades', 0)}
+• Win Rate: {summary.get('win_rate', 0)}%
+**⏱️ Uptime:** {self._get_uptime()}
 """
             
             await update.message.reply_text(status_text, parse_mode='Markdown')
             
         except Exception as e:
-            await update.message.reply_text(f"❌ Error: {e}")
+            logger.error(f"Error in cmd_status: {e}")
+            await update.message.reply_text(f"❌ Error: {str(e)}")
     
     async def cmd_positions(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show open positions"""
         try:
-            open_positions = [p for p in self.trading_bot.risk_manager.positions.values() 
-                            if p['status'] == 'open']
+            if not hasattr(self.trading_bot, 'risk_manager') or not self.trading_bot.risk_manager:
+                await update.message.reply_text("✅ Risk manager not initialized")
+                return
+            
+            positions = getattr(self.trading_bot.risk_manager, 'positions', {})
+            open_positions = [p for p in positions.values() 
+                            if p.get('status') == 'open']
             
             if not open_positions:
                 await update.message.reply_text("✅ No open positions")
@@ -99,49 +129,72 @@ class TelegramBotHandler:
             text = f"📈 **OPEN POSITIONS ({len(open_positions)})**\n\n"
             
             for i, pos in enumerate(open_positions, 1):
-                pnl_emoji = "🟢" if pos['pnl_percent'] > 0 else "🔴"
-                text += f"{i}. {pos['mint'][:8]}... - {pnl_emoji} {pos['pnl_percent']:.2f}%\n"
+                pnl_percent = pos.get('pnl_percent', 0)
+                pnl_emoji = "🟢" if pnl_percent > 0 else "🔴"
+                mint = pos.get('mint', 'Unknown')[:8]
+                text += f"{i}. {mint}... - {pnl_emoji} {pnl_percent:.2f}%\n"
             
             await update.message.reply_text(text, parse_mode='Markdown')
             
         except Exception as e:
-            await update.message.reply_text(f"❌ Error: {e}")
+            logger.error(f"Error in cmd_positions: {e}")
+            await update.message.reply_text(f"❌ Error: {str(e)}")
     
     async def cmd_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Show statistics"""
         try:
-            perf = self.trading_bot.monitor.get_performance_summary()
+            if hasattr(self.trading_bot, 'monitor') and self.trading_bot.monitor:
+                perf = self.trading_bot.monitor.get_performance_summary()
+            else:
+                perf = {
+                    'total_trades': 0,
+                    'win_rate': 0,
+                    'winning_trades': 0,
+                    'losing_trades': 0
+                }
             
             stats_text = f"""
-📊 **STATS**
+📊 **TRADING STATS**
 
-• Total Trades: {perf['total_trades']}
-• Win Rate: {perf['win_rate']}
-• Wins: {perf['winning_trades']}
-• Losses: {perf['losing_trades']}
+• Total Trades: {perf.get('total_trades', 0)}
+• Win Rate: {perf.get('win_rate', 0)}%
+• Wins: {perf.get('winning_trades', 0)}
+• Losses: {perf.get('losing_trades', 0)}
 """
             
             await update.message.reply_text(stats_text, parse_mode='Markdown')
             
         except Exception as e:
-            await update.message.reply_text(f"❌ Error: {e}")
+            logger.error(f"Error in cmd_stats: {e}")
+            await update.message.reply_text(f"❌ Error: {str(e)}")
     
     async def cmd_pause(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Pause trading"""
-        self.trading_bot.trading_active = False
-        await update.message.reply_text("⏸️ Trading paused")
-        logger.warning("Trading paused by user")
+        try:
+            self.trading_bot.trading_active = False
+            await update.message.reply_text("⏸️ Trading paused")
+            logger.warning("Trading paused by user via Telegram")
+        except Exception as e:
+            logger.error(f"Error in cmd_pause: {e}")
+            await update.message.reply_text(f"❌ Error: {str(e)}")
     
     async def cmd_resume(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Resume trading"""
-        self.trading_bot.trading_active = True
-        await update.message.reply_text("▶️ Trading resumed")
-        logger.info("Trading resumed by user")
+        try:
+            self.trading_bot.trading_active = True
+            await update.message.reply_text("▶️ Trading resumed")
+            logger.info("Trading resumed by user via Telegram")
+        except Exception as e:
+            logger.error(f"Error in cmd_resume: {e}")
+            await update.message.reply_text(f"❌ Error: {str(e)}")
     
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle button callbacks"""
-        query = update.callback_query
-        await query.answer()
+        try:
+            query = update.callback_query
+            await query.answer()
+        except Exception as e:
+            logger.error(f"Error in button_callback: {e}")
     
     async def send_alert(self, title: str, message: str, alert_type: str = "info"):
         """Send alert to Telegram"""
@@ -164,10 +217,66 @@ class TelegramBotHandler:
                     text=full_message,
                     parse_mode='Markdown'
                 )
+                logger.info(f"Alert sent: {title}")
         except Exception as e:
             logger.error(f"Error sending alert: {e}")
     
+    async def _start_polling_async(self):
+        """Start polling in async context"""
+        try:
+            logger.info("Starting Telegram bot polling...")
+            await self.application.initialize()
+            await self.application.start()
+            await self.application.updater.start_polling(allowed_updates=["message", "callback_query"])
+            logger.info("✅ Telegram bot polling started")
+        except Exception as e:
+            logger.error(f"Error in async polling: {e}")
+    
     def start_polling(self):
-        """Start Telegram bot polling"""
-        logger.info("Starting Telegram bot polling...")
-        self.application.run_polling()
+        """Start Telegram bot polling in separate thread"""
+        def run_bot():
+            try:
+                # Create new event loop for this thread
+                self.loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self.loop)
+                
+                logger.info("Starting Telegram bot polling in thread...")
+                self.loop.run_until_complete(self._start_polling_async())
+                
+                # Keep the loop running
+                self.loop.run_forever()
+                
+            except Exception as e:
+                logger.error(f"Telegram polling thread error: {e}")
+            finally:
+                if self.loop:
+                    self.loop.close()
+        
+        # Start polling in separate thread
+        polling_thread = Thread(target=run_bot, daemon=True, name="TelegramBot")
+        polling_thread.start()
+        logger.info("✅ Telegram bot thread started")
+    
+    async def stop_polling(self):
+        """Stop Telegram bot polling"""
+        try:
+            logger.info("Stopping Telegram bot...")
+            await self.application.updater.stop()
+            await self.application.stop()
+            await self.application.shutdown()
+            logger.info("✅ Telegram bot stopped")
+        except Exception as e:
+            logger.error(f"Error stopping bot: {e}")
+    
+    def _get_uptime(self) -> str:
+        """Get bot uptime"""
+        try:
+            if hasattr(self.trading_bot, 'start_time'):
+                uptime_seconds = (datetime.now() - self.trading_bot.start_time).total_seconds()
+                hours = int(uptime_seconds // 3600)
+                minutes = int((uptime_seconds % 3600) // 60)
+                seconds = int(uptime_seconds % 60)
+                return f"{hours}h {minutes}m {seconds}s"
+            return "N/A"
+        except:
+            return "N/A"
