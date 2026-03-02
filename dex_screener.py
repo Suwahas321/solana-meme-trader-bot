@@ -1,7 +1,6 @@
 """
-DexScreener API Integration - Enhanced Version
+DexScreener API Integration
 Fetch token data, price, liquidity, and market cap
-With fallback endpoints and better error handling
 """
 
 import requests
@@ -9,7 +8,6 @@ import logging
 from typing import Dict, Optional, List
 from config import *
 from datetime import datetime
-import time
 
 logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger(__name__)
@@ -21,24 +19,11 @@ class DexScreenerClient:
     def __init__(self):
         self.api_url = DEXSCREENER_API
         self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'solana-meme-trader-bot/1.0',
-            'Accept': 'application/json'
-        })
-        self.last_request_time = 0
-        self.min_request_interval = 0.5  # Minimum 0.5 seconds between requests
-    
-    def _rate_limit(self):
-        """Simple rate limiting to avoid hitting API limits"""
-        elapsed = time.time() - self.last_request_time
-        if elapsed < self.min_request_interval:
-            time.sleep(self.min_request_interval - elapsed)
-        self.last_request_time = time.time()
+        self.session.headers.update({'User-Agent': 'solana-meme-trader-bot/1.0'})
     
     def search_token(self, token_address: str) -> Optional[Dict]:
         """Search for token on Solana"""
         try:
-            self._rate_limit()
             url = f"{self.api_url}/tokens/solana/{token_address}"
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
@@ -51,89 +36,147 @@ class DexScreenerClient:
         except requests.exceptions.Timeout:
             logger.error(f"Timeout searching token {token_address}")
             return None
-        except requests.exceptions.ConnectionError:
-            logger.error(f"Connection error searching token {token_address}")
-            return None
         except Exception as e:
             logger.error(f"Error searching token {token_address}: {e}")
             return None
     
     def get_latest_tokens(self, limit: int = 20) -> List[Dict]:
-        """Get latest tokens on Solana - using correct endpoint"""
+        """Get latest tokens on Solana - with multiple fallback methods"""
+        tokens = []
+        
+        # Method 1: Try the /latest endpoint (most reliable)
+        logger.info("🔍 Attempting to fetch tokens from DexScreener...")
+        tokens = self._try_latest_endpoint(limit)
+        if tokens:
+            return tokens
+        
+        # Method 2: Try searching by Raydium pairs (fallback)
+        logger.warning("⚠️ /latest endpoint failed, trying Raydium pairs...")
+        tokens = self._try_raydium_pairs(limit)
+        if tokens:
+            return tokens
+        
+        # Method 3: Try searching trending tokens (last resort)
+        logger.warning("⚠️ Raydium failed, trying trending tokens...")
+        tokens = self._try_trending_tokens(limit)
+        if tokens:
+            return tokens
+        
+        logger.error("❌ All methods failed to fetch tokens")
+        return []
+    
+    def _try_latest_endpoint(self, limit: int) -> List[Dict]:
+        """Try the /latest endpoint"""
         try:
-            self._rate_limit()
-            
-            # DexScreener endpoint for latest tokens
             url = f"{self.api_url}/tokens/solana/latest"
-            
-            logger.info(f"Fetching latest tokens from: {url}")
-            
-            response = self.session.get(url, timeout=15)  # Increased timeout
-            
-            # Log response status
-            logger.info(f"DexScreener response status: {response.status_code}")
-            
+            response = self.session.get(url, timeout=10)
             response.raise_for_status()
             
             data = response.json()
             tokens = []
             
-            # Handle response structure properly
-            if data is None:
-                logger.warning("DexScreener returned None response")
-                return []
-            
-            if not isinstance(data, dict):
-                logger.warning(f"Unexpected response type: {type(data)}")
-                logger.warning(f"Response data: {data}")
+            if data is None or not isinstance(data, dict):
                 return []
             
             pairs = data.get('pairs', [])
-            
             if not pairs:
-                logger.warning("No pairs found in DexScreener response")
-                logger.warning(f"Response keys: {data.keys()}")
                 return []
             
-            logger.info(f"DexScreener returned {len(pairs)} pairs")
-            
-            for i, pair in enumerate(pairs[:limit]):
+            for pair in pairs[:limit]:
                 if pair is None:
                     continue
-                try:
-                    token = self._parse_token_data(pair)
-                    if token:
-                        tokens.append(token)
-                except Exception as e:
-                    logger.debug(f"Error parsing pair {i}: {e}")
-                    continue
+                token = self._parse_token_data(pair)
+                if token:
+                    tokens.append(token)
             
-            logger.info(f"✅ Fetched and parsed {len(tokens)} tokens from DexScreener")
+            if tokens:
+                logger.info(f"✅ Fetched {len(tokens)} tokens from /latest endpoint")
             return tokens
             
         except requests.exceptions.Timeout:
-            logger.error("DexScreener API timeout - request took too long (>15 seconds)")
+            logger.warning("⚠️ /latest endpoint timeout")
             return []
-        except requests.exceptions.ConnectionError as e:
-            logger.error(f"DexScreener API connection error: {e}")
+        except requests.exceptions.ConnectionError:
+            logger.warning("⚠️ /latest endpoint connection error")
             return []
         except requests.exceptions.HTTPError as e:
-            logger.error(f"HTTP Error from DexScreener: {e.response.status_code}")
-            logger.error(f"Response text: {e.response.text[:200]}")
+            logger.warning(f"⚠️ HTTP Error from /latest: {e.response.status_code}")
             return []
         except Exception as e:
-            logger.error(f"Error fetching latest tokens: {e}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.warning(f"⚠️ Error with /latest endpoint: {e}")
+            return []
+    
+    def _try_raydium_pairs(self, limit: int) -> List[Dict]:
+        """Try fetching Raydium pairs"""
+        try:
+            # Query for Raydium DEX pairs
+            url = f"{self.api_url}/dexes/solana/raydium"
+            response = self.session.get(url, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            tokens = []
+            
+            if data is None or not isinstance(data, dict):
+                return []
+            
+            pairs = data.get('pairs', [])
+            if not pairs:
+                return []
+            
+            for pair in pairs[:limit]:
+                if pair is None:
+                    continue
+                token = self._parse_token_data(pair)
+                if token:
+                    tokens.append(token)
+            
+            if tokens:
+                logger.info(f"✅ Fetched {len(tokens)} tokens from Raydium")
+            return tokens
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error with Raydium endpoint: {e}")
+            return []
+    
+    def _try_trending_tokens(self, limit: int) -> List[Dict]:
+        """Try fetching trending tokens"""
+        try:
+            # Query for trending tokens
+            url = f"{self.api_url}/tokens/solana/trending"
+            response = self.session.get(url, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            tokens = []
+            
+            if data is None or not isinstance(data, dict):
+                return []
+            
+            pairs = data.get('pairs', [])
+            if not pairs:
+                return []
+            
+            for pair in pairs[:limit]:
+                if pair is None:
+                    continue
+                token = self._parse_token_data(pair)
+                if token:
+                    tokens.append(token)
+            
+            if tokens:
+                logger.info(f"✅ Fetched {len(tokens)} tokens from trending")
+            return tokens
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Error with trending endpoint: {e}")
             return []
     
     def get_token_ohlcv(self, token_address: str, timeframe: str = "1h") -> List[Dict]:
         """Get OHLCV candle data"""
         try:
-            self._rate_limit()
-            
             url = f"{self.api_url}/tokens/solana/{token_address}/candlesticks?timeframe={timeframe}"
-            response = self.session.get(url, timeout=15)
+            response = self.session.get(url, timeout=10)
             response.raise_for_status()
             
             data = response.json()
@@ -178,12 +221,7 @@ class DexScreenerClient:
             base_token = pair_data.get('baseToken', {})
             
             # Safe extraction with defaults
-            liquidity_obj = pair_data.get('liquidity', {})
-            if isinstance(liquidity_obj, dict):
-                liquidity = float(liquidity_obj.get('usd', 0))
-            else:
-                liquidity = 0
-            
+            liquidity = float(pair_data.get('liquidity', {}).get('usd', 0)) if pair_data.get('liquidity') else 0
             market_cap = float(pair_data.get('marketCap', 0)) if pair_data.get('marketCap') else 0
             
             if liquidity < MIN_LIQUIDITY_USD:
@@ -192,18 +230,8 @@ class DexScreenerClient:
                 return None
             
             price_usd = float(pair_data.get('priceUsd', 0)) if pair_data.get('priceUsd') else 0
-            
-            price_change_obj = pair_data.get('priceChange', {})
-            if isinstance(price_change_obj, dict):
-                price_change_24h = float(price_change_obj.get('h24', 0))
-            else:
-                price_change_24h = 0
-            
-            volume_obj = pair_data.get('volume', {})
-            if isinstance(volume_obj, dict):
-                volume_24h = float(volume_obj.get('h24', 0))
-            else:
-                volume_24h = 0
+            price_change_24h = float(pair_data.get('priceChange', {}).get('h24', 0)) if pair_data.get('priceChange') else 0
+            volume_24h = float(pair_data.get('volume', {}).get('h24', 0)) if pair_data.get('volume') else 0
             
             return {
                 'mint_address': base_token.get('address'),
