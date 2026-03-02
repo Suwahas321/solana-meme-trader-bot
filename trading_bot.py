@@ -6,6 +6,8 @@ Solana Meme Coin Trader with Telegram
 import logging
 import time
 import os
+import threading
+import asyncio
 from dotenv import load_dotenv
 from datetime import datetime
 from typing import Dict, Optional, List
@@ -66,8 +68,13 @@ class SolanaMemeCoinTradingBot:
             self.risk_manager = RiskManager(wallet_balance_sol=100)
             self.monitor = Monitor()
             
-            self.telegram = TelegramBotHandler(self)
-            logger.info("✅ Telegram bot initialized")
+            # Initialize Telegram Bot
+            try:
+                self.telegram = TelegramBotHandler(self)
+                logger.info("✅ Telegram bot initialized")
+            except Exception as e:
+                logger.warning(f"⚠️ Telegram bot init warning: {e}")
+                self.telegram = None
             
             self.monitored_tokens = {}
             self.trading_active = True
@@ -273,6 +280,12 @@ class SolanaMemeCoinTradingBot:
         """Main bot loop"""
         logger.info("🚀 Bot starting...")
         
+        # Start Telegram bot in background thread
+        if self.telegram:
+            telegram_thread = threading.Thread(target=self._run_telegram, daemon=True)
+            telegram_thread.start()
+            logger.info("✅ Telegram bot thread started")
+        
         scan_counter = 0
         
         try:
@@ -302,6 +315,14 @@ class SolanaMemeCoinTradingBot:
         except KeyboardInterrupt:
             logger.info("⏹️ Bot shutting down...")
             self.trading_active = False
+    
+    def _run_telegram(self):
+        """Run Telegram bot in separate thread"""
+        try:
+            if self.telegram:
+                self.telegram.start_polling()
+        except Exception as e:
+            logger.error(f"Telegram polling error: {e}")
 
 
 if __name__ == "__main__":
