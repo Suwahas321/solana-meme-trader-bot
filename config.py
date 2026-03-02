@@ -3,6 +3,12 @@ Bot Configuration - Solana Meme Coin Trading Bot
 Adjust these settings before running
 """
 
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
 # ==================== TRADING SETTINGS ====================
 BUY_AMOUNT_SOL = 0.01  # Per trade
 TAKE_PROFIT_1_PERCENT = 300  # 3x (sell 50%)
@@ -59,9 +65,10 @@ DEXSCREENER_API = "https://api.dexscreener.com/latest/dex"
 HELIUS_MAINNET_URL = "https://mainnet.helius-rpc.com"
 SOLANA_RPC_URL = "https://api.mainnet-beta.solana.com"
 
-# ==================== WALLET SETTINGS ====================
-WALLET_PRIVATE_KEY = ""  # Set in .env
-WALLET_ADDRESS = ""
+# Load from environment variables
+HELIUS_API_KEY = os.getenv('HELIUS_API_KEY', '')
+WALLET_PRIVATE_KEY = os.getenv('WALLET_PRIVATE_KEY', '')
+WALLET_ADDRESS = os.getenv('WALLET_ADDRESS', '')
 
 # ==================== MONITORING ====================
 UPDATE_INTERVAL_SECONDS = 30
