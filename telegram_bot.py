@@ -39,6 +39,9 @@ class TelegramBotHandler:
         self.polling_task = None
         self.loop = None
         
+        # Track starting balance for balance change calculation
+        self.starting_balance = None
+        
         logger.info("✅ Telegram bot initialized")
     
     def _setup_handlers(self):
@@ -49,6 +52,8 @@ class TelegramBotHandler:
         self.application.add_handler(CommandHandler("stats", self.cmd_stats))
         self.application.add_handler(CommandHandler("pause", self.cmd_pause))
         self.application.add_handler(CommandHandler("resume", self.cmd_resume))
+        self.application.add_handler(CommandHandler("balance", self.cmd_balance))
+        self.application.add_handler(CommandHandler("wallet", self.cmd_wallet))
         self.application.add_handler(CallbackQueryHandler(self.button_callback))
     
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -61,9 +66,11 @@ class TelegramBotHandler:
 👋 Welcome {user.first_name}!
 
 **Commands:**
-• `/status` - Bot status
+• `/status` - Bot status & trading state
+• `/balance` - Account balance & changes
+• `/wallet` - Wallet details
 • `/positions` - Open positions
-• `/stats` - Trading stats
+• `/stats` - Trading statistics
 • `/pause` - Pause trading
 • `/resume` - Resume trading
 """
@@ -102,6 +109,7 @@ class TelegramBotHandler:
 • Open Trades: {summary.get('open_positions', 0)}
 • Total Trades: {summary.get('total_trades', 0)}
 • Win Rate: {summary.get('win_rate', 0)}%
+
 **⏱️ Uptime:** {self._get_uptime()}
 """
             
@@ -109,6 +117,94 @@ class TelegramBotHandler:
             
         except Exception as e:
             logger.error(f"Error in cmd_status: {e}")
+            await update.message.reply_text(f"❌ Error: {str(e)}")
+    
+    async def cmd_balance(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show account balance"""
+        try:
+            current_balance = 0.0
+            balance_change = 0.0
+            change_percent = 0.0
+            change_emoji = "➡️"
+            
+            if hasattr(self.trading_bot, 'wallet') and self.trading_bot.wallet:
+                try:
+                    # Try to get current balance
+                    if hasattr(self.trading_bot.wallet, 'get_balance'):
+                        current_balance = self.trading_bot.wallet.get_balance()
+                    elif hasattr(self.trading_bot, 'risk_manager') and self.trading_bot.risk_manager:
+                        current_balance = self.trading_bot.risk_manager.wallet_balance
+                    
+                    # Get starting balance if available
+                    if self.starting_balance is None:
+                        self.starting_balance = current_balance
+                    
+                    # Calculate balance change
+                    balance_change = current_balance - self.starting_balance
+                    
+                    if self.starting_balance > 0:
+                        change_percent = (balance_change / self.starting_balance) * 100
+                    
+                    # Set emoji based on change
+                    if balance_change > 0:
+                        change_emoji = "🟢"  # Green for profit
+                    elif balance_change < 0:
+                        change_emoji = "🔴"  # Red for loss
+                    else:
+                        change_emoji = "⚪"  # White for no change
+                    
+                except Exception as e:
+                    logger.debug(f"Error getting balance: {e}")
+            
+            balance_text = f"""
+💰 **ACCOUNT BALANCE**
+
+**Current Balance:** {current_balance:.4f} SOL
+
+**Balance Change:** {change_emoji}
+• Change: {balance_change:+.4f} SOL
+• Percentage: {change_percent:+.2f}%
+
+**Starting Balance:** {self.starting_balance:.4f} SOL
+
+{'✅ Profitable!' if balance_change > 0 else '⚠️ At risk' if balance_change < 0 else '➡️ Breakeven'}
+"""
+            
+            await update.message.reply_text(balance_text, parse_mode='Markdown')
+            
+        except Exception as e:
+            logger.error(f"Error in cmd_balance: {e}")
+            await update.message.reply_text(f"❌ Error: {str(e)}")
+    
+    async def cmd_wallet(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show wallet details"""
+        try:
+            wallet_address = "Not initialized"
+            wallet_public_key = "Not available"
+            
+            if hasattr(self.trading_bot, 'wallet') and self.trading_bot.wallet:
+                try:
+                    wallet_address = self.trading_bot.wallet.get_address()
+                    wallet_public_key = wallet_address[:8] + "..." + wallet_address[-8:]
+                except:
+                    wallet_address = "Error getting address"
+            
+            wallet_text = f"""
+💳 **WALLET DETAILS**
+
+**Address:** `{wallet_public_key}`
+
+**Status:** ✅ Connected
+
+**Network:** Solana
+
+**Type:** Trading Account
+"""
+            
+            await update.message.reply_text(wallet_text, parse_mode='Markdown')
+            
+        except Exception as e:
+            logger.error(f"Error in cmd_wallet: {e}")
             await update.message.reply_text(f"❌ Error: {str(e)}")
     
     async def cmd_positions(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
