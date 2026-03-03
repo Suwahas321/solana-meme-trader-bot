@@ -1,85 +1,71 @@
-"""
-Helius API Integration
-On-chain data, token metadata, holder info
-"""
-
 import requests
 import logging
-from typing import Dict, Optional, List
-from config import *
+from config import HELIUS_API_KEY
 
-logging.basicConfig(level=LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
-
-class HeliusClient:
-    """Helius RPC client for advanced Solana data"""
+class HeliosClient:
+    """Helius API client for Solana wallet data"""
     
     def __init__(self):
         self.api_key = HELIUS_API_KEY
-        self.rpc_url = f"{HELIUS_MAINNET_URL}/?api-key={HELIUS_API_KEY}"
-        self.session = requests.Session()
+        self.base_url = "https://api.helius.xyz/v0"
     
-    def get_token_metadata(self, token_address: str) -> Optional[Dict]:
-        """Get comprehensive token metadata"""
+    def get_balance(self, wallet_address):
+        """Get wallet balance (SOL)"""
         try:
+            url = f"https://api.mainnet-beta.solana.com"
+            
             payload = {
                 "jsonrpc": "2.0",
                 "id": 1,
-                "method": "getAsset",
-                "params": {"id": token_address}
+                "method": "getBalance",
+                "params": [wallet_address]
             }
             
-            response = self.session.post(self.rpc_url, json=payload, timeout=10)
+            response = requests.post(url, json=payload, timeout=10)
             response.raise_for_status()
             
             data = response.json()
-            if 'result' in data:
-                return data['result']
+            balance_lamports = data.get('result', {}).get('value', 0)
+            balance_sol = balance_lamports / 1e9
             
-            return None
+            logger.info(f"✅ Helius SOL Balance: {balance_sol} SOL")
+            return balance_sol
             
         except Exception as e:
-            logger.error(f"Error getting token metadata: {e}")
+            logger.error(f"❌ Helius error fetching balance: {e}")
             return None
     
-    def get_token_holders(self, token_address: str, limit: int = 100) -> List[Dict]:
-        """Get top token holders"""
+    def get_token_holders(self, token_mint):
+        """Get token holder information"""
         try:
-            payload = {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "getTokenHolders",
-                "params": {"tokenAddress": token_address, "limit": limit}
+            url = f"{self.base_url}/token/metadata"
+            params = {
+                "token": token_mint,
+                "api-key": self.api_key
             }
             
-            response = self.session.post(self.rpc_url, json=payload, timeout=10)
+            response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
             
             data = response.json()
-            return data.get('result', [])
+            return data
             
         except Exception as e:
-            logger.error(f"Error getting token holders: {e}")
-            return []
+            logger.error(f"❌ Helius error fetching token info: {e}")
+            return None
     
-    def check_holder_concentration(self, token_address: str) -> Optional[float]:
-        """Check if top holder has too much concentration"""
+    def get_token_holders_count(self, token_mint):
+        """Get number of token holders"""
         try:
-            holders = self.get_token_holders(token_address, limit=10)
-            
-            if not holders:
-                return None
-            
-            total_supply = float(holders[0].get('supply', 0))
-            top_holder_amount = float(holders[0].get('amount', 0))
-            
-            if total_supply > 0:
-                concentration = (top_holder_amount / total_supply) * 100
-                return concentration
-            
-            return None
+            token_info = self.get_token_holders(token_mint)
+            if token_info:
+                holders = token_info.get('holder_count', 0)
+                logger.info(f"✅ Helius - Token {token_mint} has {holders} holders")
+                return holders
+            return 0
             
         except Exception as e:
-            logger.error(f"Error checking holder concentration: {e}")
-            return None
+            logger.error(f"❌ Helius error fetching holder count: {e}")
+            return 0
