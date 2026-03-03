@@ -10,19 +10,25 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ==================== TRADING SETTINGS ====================
-BUY_AMOUNT_SOL = 0.01  # Per trade
-TAKE_PROFIT_1_PERCENT = 300  # 3x (sell 50%)
-TAKE_PROFIT_2_PERCENT = 500  # 5x (sell 50%)
-STOP_LOSS_PERCENT = -35  # -35%
-MAX_OPEN_TRADES = 3  # Max concurrent positions
-PAPER_TRADING = True  # Set to False for LIVE TRADING ⚠️
+BUY_AMOUNT_SOL = 0.02        # Per trade — small test size
+TAKE_PROFIT_1_PERCENT = 20   # 1.2x (sell 50%)
+TAKE_PROFIT_2_PERCENT = 50   # 1.5x (sell 50%)
+STOP_LOSS_PERCENT = -25      # Tightened to -25% — protects capital faster
+MAX_OPEN_TRADES = 2          # Only 2 concurrent — max exposure 0.04 SOL at once
+PAPER_TRADING = False        # 🚨 LIVE TRADING ENABLED
 
 # ==================== MARKET FILTERS ====================
-MIN_LIQUIDITY_USD = 10000
-MAX_MARKET_CAP_USD = 500000
-MIN_VOLUME_24H_USD = 5000
-MIN_HOLDERS = 100
-MAX_CONCENTRATION = 30  # Top holder shouldn't be >30%
+MIN_LIQUIDITY_USD = 1000       # Aggressive — catches very new tokens ($1k min)
+MAX_MARKET_CAP_USD = 10000000  # $10M cap — wide net for meme coins
+MIN_VOLUME_24H_USD = 500       # Very low threshold — early stage tokens
+MIN_HOLDERS = 10               # Minimal — new tokens start with few holders
+MAX_CONCENTRATION = 50         # Relaxed — allow up to 50% top holder
+
+# Minimum buy confidence from TA (when OHLCV available)
+MIN_BUY_CONFIDENCE = 50        # Lowered from 60 — more trades
+
+# Minimum price change to consider a token (momentum filter)
+MIN_PRICE_CHANGE_1H = -10.0   # Allow tokens down up to -10% in 1h
 
 # ==================== TECHNICAL ANALYSIS ====================
 # Moving Averages
@@ -77,8 +83,9 @@ LOG_LEVEL = "INFO"
 
 # ==================== EMERGENCY SETTINGS ====================
 ENABLE_PANIC_SELL = True
-PANIC_SELL_THRESHOLD = -50
-MAX_DAILY_LOSS_PERCENT = -20
+PANIC_SELL_THRESHOLD = -30      # Panic sell if any position drops -30%
+MAX_DAILY_LOSS_PERCENT = -15    # Stop all trading if wallet down -15% in a day
+MAX_TOTAL_LOSS_SOL = 0.4        # Hard stop — halt bot if total losses exceed 0.4 SOL
 
 # ==================== PERFORMANCE TARGETS ====================
 TARGET_WIN_RATE = 0.80
